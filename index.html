@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>test</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .status-box {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: white; padding: 10px; border-radius: 5px; border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="status-box">
+        <strong>Status:</strong> <span id="status">Verbinde...</span><br>
+        <strong>Deine ID:</strong> <span id="my-id">-</span>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        // 1. Karte initialisieren (Zentriert auf Österreich)
+        var map = L.map('map').setView([47.6, 13.3], 7);
+        var markers = {};
+
+        L.tileLayer('http://192.168.1.108:8080/styles/basic-preview/256/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: 'Österreich Live Map'
+        }).addTo(map);
+
+        // 2. PeerJS Initialisierung
+        const peer = new Peer();
+        
+        peer.on('open', (id) => {
+            document.getElementById('my-id').innerText = id;
+            document.getElementById('status').innerText = "Bereit (Warte auf Partner)";
+            console.log('Meine Peer-ID ist: ' + id);
+        });
+
+        // 3. Standort finden und senden
+        map.locate({setView: true, maxZoom: 15, watch: true});
+
+        map.on('locationfound', (e) => {
+            const myPos = { lat: e.latlng.lat, lon: e.latlng.lng };
+            
+            // Eigenen Marker setzen/bewegen
+            if (!markers["me"]) {
+                markers["me"] = L.marker(e.latlng, {title: "Ich"}).addTo(map).bindPopup("Das bin ich").openPopup();
+            } else {
+                markers["me"].setLatLng(e.latlng);
+            }
+
+            // Hier müsstest du die ID deines Freundes eingeben, um ihm die Daten zu senden
+            // (In einer Profi-Version würde man hier eine Liste von IDs abfragen)
+        });
+
+        // 4. Empfangen von Daten anderer Personen
+        peer.on('connection', (conn) => {
+            conn.on('data', (data) => {
+                if (data.lat && data.lon) {
+                    if (!markers[conn.peer]) {
+                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Person: " + conn.peer);
+                    } else {
+                        markers[conn.peer].setLatLng([data.lat, data.lon]);
+                    }
+                }
+            });
+        });
+
+    </script>
+</body>
+</html>
