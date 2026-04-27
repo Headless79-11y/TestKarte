@@ -34,9 +34,12 @@
 
       
 L.tileLayer('https://eddie-cigarette-cleared-tooth.trycloudflare.com/styles/basic-preview/{z}/{x}/{y}.png', {
-    maxZoom: 18,
+    maxZoom: 20, // Hier von 18 auf 20 hochgehen
     attribution: 'Österreich Live Map'
 }).addTo(map);
+
+// WICHTIG: Füge diese Zeile direkt darunter ein:
+map.setMaxZoom(20);
 
         // 2. PeerJS Initialisierung
         const peer = new Peer();
