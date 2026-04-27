@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map - Final Fix</title>
+    <title>Live Map - Namen & Team</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -15,26 +15,39 @@
         .status-box {
             position: absolute; bottom: 20px; right: 10px; z-index: 1000;
             background: white; padding: 12px; border-radius: 8px; border: 1px solid #ccc;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
         }
-        .log { font-size: 10px; color: #666; max-height: 50px; overflow: hidden; }
+        /* Style für die Namens-Labels auf der Karte */
+        .name-label {
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid #666;
+            border-radius: 4px;
+            padding: 1px 5px;
+            font-weight: bold;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
     <div class="status-box">
-        <strong>Status:</strong> <span id="status">Suche...</span><br>
+        <strong>Ich:</strong> <span id="display-name">...</span><br>
         <strong>Partner:</strong> <span id="peer-count">0</span><br>
-        <div class="log" id="log">Warte auf Daten...</div>
-        <button onclick="fitAllMarkers()" style="margin-top:5px;">Alle zentrieren</button>
+        <button onclick="fitAllMarkers()" style="margin-top:5px; width: 100%;">Alle zentrieren</button>
     </div>
     <div id="map"></div>
 
     <script>
+        // 1. Namen abfragen
+        let myName = localStorage.getItem('chatName') || prompt("Wie heißt du?", "Gast");
+        localStorage.setItem('chatName', myName);
+        document.getElementById('display-name').innerText = myName;
+
         var map = L.map('map').setView([47.6, 13.3], 7);
         var markers = {};
         var connections = {};
         var myLastPos = null;
 
-        // --- WICHTIG: DEINE AKTUELLER TUNNEL ---
+        // --- DEIN TUNNEL ---
         const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
 
         L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
@@ -42,35 +55,30 @@
         }).addTo(map);
         L.Control.geocoder({position: 'topleft'}).addTo(map);
 
-        // Wir nutzen 10 feste Slots für die automatische Findung
         const ROOM_PREFIX = "at-map-v3-"; 
         const mySlot = Math.floor(Math.random() * 10) + 1;
         const peer = new Peer(ROOM_PREFIX + mySlot);
 
         peer.on('open', (id) => {
-            document.getElementById('status').innerText = "Online (Slot " + mySlot + ")";
-            setInterval(discoverPeers, 5000); // Alle 5 Sek. nach Partnern suchen
+            setInterval(discoverPeers, 5000);
         });
 
-        // Standort finden
         map.locate({setView: true, maxZoom: 16, watch: true});
         map.on('locationfound', (e) => {
-            myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng };
+            myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
             if (!markers["me"]) {
-                markers["me"] = L.marker(e.latlng, {zIndexOffset: 1000}).addTo(map).bindPopup("Ich").openPopup();
+                markers["me"] = L.marker(e.latlng, {zIndexOffset: 1000}).addTo(map)
+                    .bindTooltip(myName, {permanent: true, direction: 'top', className: 'name-label'}).openTooltip();
             } else {
                 markers["me"].setLatLng(e.latlng);
             }
         });
 
-        // AUTOMATISCHES SENDEN (Alle 2 Sekunden)
+        // Sende Namen und Position alle 2 Sekunden
         setInterval(() => {
             if (myLastPos) {
                 Object.values(connections).forEach(conn => {
-                    if (conn.open) {
-                        conn.send(myLastPos);
-                        console.log("Sende an " + conn.peer);
-                    }
+                    if (conn.open) conn.send(myLastPos);
                 });
             }
         }, 2000);
@@ -91,12 +99,15 @@
         function setupConn(conn) {
             connections[conn.peer] = conn;
             conn.on('data', (data) => {
-                document.getElementById('log').innerText = "Daten von Slot " + conn.peer.replace(ROOM_PREFIX, "");
                 if (data.lat && data.lon) {
+                    let partnerName = data.name || "Partner " + conn.peer.replace(ROOM_PREFIX, "");
                     if (!markers[conn.peer]) {
-                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Partner " + conn.peer.replace(ROOM_PREFIX, ""));
+                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map)
+                            .bindTooltip(partnerName, {permanent: true, direction: 'top', className: 'name-label'});
                     } else {
                         markers[conn.peer].setLatLng([data.lat, data.lon]);
+                        // Falls sich der Name ändert (z.B. neu eingeloggt)
+                        markers[conn.peer].setTooltipContent(partnerName);
                     }
                 }
                 updateUI();
