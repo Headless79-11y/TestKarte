@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map2</title>
+    <title>Live Map3</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -26,6 +26,7 @@
 <body>
     <div class="status-box">
         <strong>Ich:</strong> <span id="display-name">...</span><br>
+        <strong>Status:</strong> <span id="status">Verbinde...</span><br>
         <strong>Partner aktiv:</strong> <span id="peer-count">0</span><br>
         <button onclick="fitAllMarkers()" style="margin-top:5px; width: 100%; cursor: pointer;">Alle zentrieren</button>
     </div>
@@ -44,49 +45,43 @@
         const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
         L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
         
-        // Fix für Geocoder Error
         if (typeof L.Control.Geocoder.nominatim === 'function') {
             L.Control.geocoder({ position: 'topleft' }).addTo(map);
         }
 
-        const ROOM_PREFIX = "at-map-final-v5-"; 
+        // Neuer Prefix um alte Fehler-Sitzungen zu löschen
+        const ROOM_PREFIX = "at-map-v6-"; 
         const mySlot = Math.floor(Math.random() * 10) + 1;
         let peer = null;
+        let reconnectTimer = null;
+        let discoveryInterval = null;
 
-     let reconnectTimer = null;
+        function initPeer() {
+            if (peer) { peer.destroy(); peer = null; }
+            if (discoveryInterval) { clearInterval(discoveryInterval); }
+            
+            peer = new Peer(ROOM_PREFIX + mySlot);
 
-function initPeer() {
-    if (peer) {
-        peer.destroy();
-        peer = null;
-    }
-    
-    // Wir lassen PeerJS die ID selbst wählen, um Kollisionen zu vermeiden
-    peer = new Peer(ROOM_PREFIX + mySlot);
+            peer.on('open', () => {
+                document.getElementById('status').innerText = "Online (" + mySlot + ")";
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                // Suche alle 10 Sekunden nach Partnern
+                discoveryInterval = setInterval(discoverPeers, 10000); 
+            });
 
-    peer.on('open', () => {
-        console.log("Erfolgreich verbunden auf Slot " + mySlot);
-        document.getElementById('status').innerText = "Online (" + mySlot + ")";
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        
-        // Erst nach erfolgreichem Login Partner suchen
-        setInterval(discoverPeers, 10000); 
-    });
-
-    peer.on('error', (err) => {
-        console.error("PeerJS Fehler:", err.type);
-        // Bei Netzwerkfehlern NICHT sofort neu starten, sondern 10 Sek warten
-        if (err.type === 'network' || err.type === 'server-error') {
-            document.getElementById('status').innerText = "Server-Pause...";
-            if (!reconnectTimer) {
-                reconnectTimer = setTimeout(() => {
-                    reconnectTimer = null;
-                    initPeer();
-                }, 10000); 
-            }
+            peer.on('connection', (conn) => setupConn(conn));
+            
+            peer.on('error', (err) => {
+                console.error("PeerJS Fehler:", err.type);
+                // Wenn der WebSocket fehlschlägt
+                if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+                    document.getElementById('status').innerText = "Verbindung verloren...";
+                    if (!reconnectTimer) {
+                        reconnectTimer = setTimeout(initPeer, 10000); // 10 Sek warten bis zum Neuaufbau
+                    }
+                }
+            });
         }
-    });
-}
 
         initPeer();
 
@@ -101,6 +96,7 @@ function initPeer() {
             }
         });
 
+        // Sende-Intervall
         setInterval(() => {
             if (myLastPos) {
                 Object.values(connections).forEach(conn => { if (conn.open) conn.send(myLastPos); });
@@ -108,6 +104,7 @@ function initPeer() {
         }, 2000);
 
         function discoverPeers() {
+            if (!peer || peer.disconnected) return;
             for (let i = 1; i <= 10; i++) {
                 if (i === mySlot) continue;
                 const targetId = ROOM_PREFIX + i;
