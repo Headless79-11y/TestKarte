@@ -3,149 +3,136 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map3</title>
+    <title>Live Map4</title>
+    
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; overflow: hidden; }
+        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
         #map { height: 100vh; width: 100%; }
         .status-box {
             position: absolute; bottom: 20px; right: 10px; z-index: 1000;
             background: white; padding: 12px; border-radius: 8px; border: 1px solid #ccc;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2); min-width: 150px;
         }
-        .name-label {
-            background: rgba(255, 255, 255, 0.8); border: 1px solid #666;
-            border-radius: 4px; padding: 1px 5px; font-weight: bold; white-space: nowrap;
-        }
+        .name-label { background: white; border: 1px solid black; padding: 2px; font-weight: bold; }
     </style>
 </head>
 <body>
+
     <div class="status-box">
         <strong>Ich:</strong> <span id="display-name">...</span><br>
-        <strong>Status:</strong> <span id="status">Verbinde...</span><br>
-        <strong>Partner aktiv:</strong> <span id="peer-count">0</span><br>
-        <button onclick="fitAllMarkers()" style="margin-top:5px; width: 100%; cursor: pointer;">Alle zentrieren</button>
+        <strong>Status:</strong> <span id="status">Warte...</span><br>
+        <strong>Partner:</strong> <span id="peer-count">0</span><br>
+        <button onclick="fitAllMarkers()" style="width:100%; margin-top:10px;">Alle anzeigen</button>
     </div>
     <div id="map"></div>
 
     <script>
-        let myName = localStorage.getItem('chatName') || prompt("Wie heißt du?", "Gast");
+        // Name & Grund-Setup
+        let myName = localStorage.getItem('chatName') || prompt("Name?", "User");
         localStorage.setItem('chatName', myName);
         document.getElementById('display-name').innerText = myName;
 
-        var map = L.map('map').setView([47.6, 13.3], 7);
-        var markers = {};
-        var connections = {};
-        var myLastPos = null;
-
+        const map = L.map('map').setView([47.6, 13.3], 7);
         const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
-        L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
         
-        if (typeof L.Control.Geocoder.nominatim === 'function') {
-            L.Control.geocoder({ position: 'topleft' }).addTo(map);
-        }
+        L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
 
-        // Neuer Prefix um alte Fehler-Sitzungen zu löschen
-        const ROOM_PREFIX = "at-map-v6-"; 
+        // Geocoder sicher initialisieren
+        try {
+            if (L.Control.Geocoder) {
+                L.Control.geocoder().addTo(map);
+            }
+        } catch(e) { console.error("Suche konnte nicht geladen werden."); }
+
+        // PeerJS Setup
+        const ROOM_PREFIX = "live-team-v7-"; 
         const mySlot = Math.floor(Math.random() * 10) + 1;
         let peer = null;
-        let reconnectTimer = null;
-        let discoveryInterval = null;
+        let connections = {};
+        let markers = {};
+        let myLastPos = null;
 
-        function initPeer() {
-            if (peer) { peer.destroy(); peer = null; }
-            if (discoveryInterval) { clearInterval(discoveryInterval); }
-            
+        function connectPeer() {
+            if (peer) peer.destroy();
             peer = new Peer(ROOM_PREFIX + mySlot);
 
             peer.on('open', () => {
-                document.getElementById('status').innerText = "Online (" + mySlot + ")";
-                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-                // Suche alle 10 Sekunden nach Partnern
-                discoveryInterval = setInterval(discoverPeers, 10000); 
+                document.getElementById('status').innerText = "Bereit (Slot " + mySlot + ")";
+                setInterval(findPartners, 10000);
             });
 
-            peer.on('connection', (conn) => setupConn(conn));
+            peer.on('connection', setupConnection);
             
             peer.on('error', (err) => {
-                console.error("PeerJS Fehler:", err.type);
-                // Wenn der WebSocket fehlschlägt
-                if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
-                    document.getElementById('status').innerText = "Verbindung verloren...";
-                    if (!reconnectTimer) {
-                        reconnectTimer = setTimeout(initPeer, 10000); // 10 Sek warten bis zum Neuaufbau
-                    }
-                }
+                console.log("PeerJS Error:", err.type);
+                document.getElementById('status').innerText = "Verbindungsfehler";
+                // Bei Netzwerkfehler nach 10 Sek neu versuchen
+                setTimeout(connectPeer, 10000);
             });
         }
 
-        initPeer();
-
-        map.locate({setView: true, maxZoom: 16, watch: true});
-        map.on('locationfound', (e) => {
-            myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
-            if (!markers["me"]) {
-                markers["me"] = L.marker(e.latlng, {zIndexOffset: 1000}).addTo(map)
-                    .bindTooltip(myName, {permanent: true, direction: 'top', className: 'name-label'}).openTooltip();
-            } else {
-                markers["me"].setLatLng(e.latlng);
-            }
-        });
-
-        // Sende-Intervall
-        setInterval(() => {
-            if (myLastPos) {
-                Object.values(connections).forEach(conn => { if (conn.open) conn.send(myLastPos); });
-            }
-        }, 2000);
-
-        function discoverPeers() {
-            if (!peer || peer.disconnected) return;
-            for (let i = 1; i <= 10; i++) {
-                if (i === mySlot) continue;
-                const targetId = ROOM_PREFIX + i;
-                if (!connections[targetId] || !connections[targetId].open) {
-                    setupConn(peer.connect(targetId, { reliable: true }));
-                }
-            }
-        }
-
-        function setupConn(conn) {
-            if (!conn) return;
+        function setupConnection(conn) {
             connections[conn.peer] = conn;
             conn.on('data', (data) => {
                 if (data.lat && data.lon) {
-                    let pName = data.name || "Partner";
                     if (!markers[conn.peer]) {
                         markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map)
-                            .bindTooltip(pName, {permanent: true, direction: 'top', className: 'name-label'});
+                            .bindTooltip(data.name || "Partner", {permanent:true});
                     } else {
                         markers[conn.peer].setLatLng([data.lat, data.lon]);
-                        markers[conn.peer].setTooltipContent(pName);
                     }
                 }
-                updateUI();
+                updateCount();
             });
             conn.on('close', () => {
                 if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
                 delete connections[conn.peer];
-                updateUI();
+                updateCount();
             });
         }
 
-        function updateUI() {
-            const activeCount = Object.values(connections).filter(c => c.open).length;
-            document.getElementById('peer-count').innerText = activeCount;
+        function findPartners() {
+            for (let i = 1; i <= 10; i++) {
+                if (i === mySlot) continue;
+                const pid = ROOM_PREFIX + i;
+                if (!connections[pid] || !connections[pid].open) {
+                    setupConnection(peer.connect(pid));
+                }
+            }
         }
 
-        function fitAllMarkers() {
-            var group = new L.featureGroup(Object.values(markers));
-            if (group.getLayers().length > 0) map.fitBounds(group.getBounds().pad(0.2));
+        function updateCount() {
+            const active = Object.values(connections).filter(c => c.open).length;
+            document.getElementById('peer-count').innerText = active;
         }
+
+        // GPS
+        map.locate({watch: true, setView: true, maxZoom: 16});
+        map.on('locationfound', (e) => {
+            myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
+            if (!markers["me"]) {
+                markers["me"] = L.marker(e.latlng).addTo(map).bindTooltip(myName + " (Ich)", {permanent:true});
+            } else {
+                markers["me"].setLatLng(e.latlng);
+            }
+            // Sende an alle Partner
+            Object.values(connections).forEach(c => { if(c.open) c.send(myLastPos); });
+        });
+
+        function fitAllMarkers() {
+            const group = new L.featureGroup(Object.values(markers));
+            if (group.getLayers().length > 0) map.fitBounds(group.getBounds());
+        }
+
+        connectPeer();
     </script>
 </body>
 </html>
