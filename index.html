@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map</title>
+    <title>Live Map2</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -18,12 +18,8 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.2);
         }
         .name-label {
-            background: rgba(255, 255, 255, 0.8);
-            border: 1px solid #666;
-            border-radius: 4px;
-            padding: 1px 5px;
-            font-weight: bold;
-            white-space: nowrap;
+            background: rgba(255, 255, 255, 0.8); border: 1px solid #666;
+            border-radius: 4px; padding: 1px 5px; font-weight: bold; white-space: nowrap;
         }
     </style>
 </head>
@@ -36,7 +32,6 @@
     <div id="map"></div>
 
     <script>
-        // 1. Namen beibehalten/abfragen
         let myName = localStorage.getItem('chatName') || prompt("Wie heißt du?", "Gast");
         localStorage.setItem('chatName', myName);
         document.getElementById('display-name').innerText = myName;
@@ -46,30 +41,43 @@
         var connections = {};
         var myLastPos = null;
 
-        // --- CLOUDFLARE TUNNEL URL ---
         const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
-
-        L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
-            maxZoom: 20, 
-            attribution: 'Österreich Live Map',
-            updateWhenIdle: true
-        }).addTo(map);
+        L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
         
-        L.Control.geocoder({position: 'topleft'}).addTo(map);
+        // Fix für Geocoder Error
+        if (typeof L.Control.Geocoder.nominatim === 'function') {
+            L.Control.geocoder({ position: 'topleft' }).addTo(map);
+        }
 
-        // --- VERBINDUNGS LOGIK (V4 für Stabilität) ---
-        const ROOM_PREFIX = "at-map-v4-final-"; 
+        const ROOM_PREFIX = "at-map-final-v5-"; 
         const mySlot = Math.floor(Math.random() * 10) + 1;
-        const peer = new Peer(ROOM_PREFIX + mySlot);
+        let peer = null;
 
-        peer.on('open', (id) => {
-            console.log("Eingeloggt auf Slot: " + mySlot);
-            // Sofortiger Scan und dann alle 5 Sekunden
-            discoverPeers();
-            setInterval(discoverPeers, 5000);
-        });
+        function initPeer() {
+            if (peer) peer.destroy();
+            peer = new Peer(ROOM_PREFIX + mySlot);
 
-        // Standort finden
+            peer.on('open', () => {
+                console.log("Verbunden auf Slot " + mySlot);
+                setInterval(discoverPeers, 7000);
+            });
+
+            peer.on('connection', (conn) => setupConn(conn));
+            
+            // Auto-Reconnect bei WebSocket-Fehler
+            peer.on('disconnected', () => {
+                console.log("Verbindung verloren, reconnect...");
+                peer.reconnect();
+            });
+
+            peer.on('error', (err) => {
+                console.error("PeerJS Fehler:", err);
+                if (err.type === 'network-dedicated') setTimeout(initPeer, 5000);
+            });
+        }
+
+        initPeer();
+
         map.locate({setView: true, maxZoom: 16, watch: true});
         map.on('locationfound', (e) => {
             myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
@@ -81,14 +89,9 @@
             }
         });
 
-        // Dauerhaftes Senden (Ping) alle 2 Sekunden
         setInterval(() => {
             if (myLastPos) {
-                Object.values(connections).forEach(conn => {
-                    if (conn.open) {
-                        conn.send(myLastPos);
-                    }
-                });
+                Object.values(connections).forEach(conn => { if (conn.open) conn.send(myLastPos); });
             }
         }, 2000);
 
@@ -96,59 +99,43 @@
             for (let i = 1; i <= 10; i++) {
                 if (i === mySlot) continue;
                 const targetId = ROOM_PREFIX + i;
-                // Nur verbinden, wenn wir nicht schon verbunden sind
                 if (!connections[targetId] || !connections[targetId].open) {
-                    const conn = peer.connect(targetId, { reliable: true });
-                    setupConn(conn);
+                    setupConn(peer.connect(targetId, { reliable: true }));
                 }
             }
         }
 
-        peer.on('connection', (conn) => {
-            setupConn(conn);
-        });
-
         function setupConn(conn) {
-            // Alte Verbindung überschreiben, falls vorhanden
+            if (!conn) return;
             connections[conn.peer] = conn;
-
             conn.on('data', (data) => {
                 if (data.lat && data.lon) {
-                    let partnerName = data.name || "Partner";
+                    let pName = data.name || "Partner";
                     if (!markers[conn.peer]) {
                         markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map)
-                            .bindTooltip(partnerName, {permanent: true, direction: 'top', className: 'name-label'});
+                            .bindTooltip(pName, {permanent: true, direction: 'top', className: 'name-label'});
                     } else {
                         markers[conn.peer].setLatLng([data.lat, data.lon]);
-                        markers[conn.peer].setTooltipContent(partnerName);
+                        markers[conn.peer].setTooltipContent(pName);
                     }
                 }
                 updateUI();
             });
-
             conn.on('close', () => {
                 if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
-                delete connections[conn.peer];
-                updateUI();
-            });
-
-            conn.on('error', () => {
                 delete connections[conn.peer];
                 updateUI();
             });
         }
 
         function updateUI() {
-            // Zähle nur wirklich offene Verbindungen
             const activeCount = Object.values(connections).filter(c => c.open).length;
             document.getElementById('peer-count').innerText = activeCount;
         }
 
         function fitAllMarkers() {
             var group = new L.featureGroup(Object.values(markers));
-            if (group.getLayers().length > 0) {
-                map.fitBounds(group.getBounds().pad(0.2));
-            }
+            if (group.getLayers().length > 0) map.fitBounds(group.getBounds().pad(0.2));
         }
     </script>
 </body>
