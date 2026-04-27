@@ -53,28 +53,40 @@
         const mySlot = Math.floor(Math.random() * 10) + 1;
         let peer = null;
 
-        function initPeer() {
-            if (peer) peer.destroy();
-            peer = new Peer(ROOM_PREFIX + mySlot);
+     let reconnectTimer = null;
 
-            peer.on('open', () => {
-                console.log("Verbunden auf Slot " + mySlot);
-                setInterval(discoverPeers, 7000);
-            });
+function initPeer() {
+    if (peer) {
+        peer.destroy();
+        peer = null;
+    }
+    
+    // Wir lassen PeerJS die ID selbst wählen, um Kollisionen zu vermeiden
+    peer = new Peer(ROOM_PREFIX + mySlot);
 
-            peer.on('connection', (conn) => setupConn(conn));
-            
-            // Auto-Reconnect bei WebSocket-Fehler
-            peer.on('disconnected', () => {
-                console.log("Verbindung verloren, reconnect...");
-                peer.reconnect();
-            });
+    peer.on('open', () => {
+        console.log("Erfolgreich verbunden auf Slot " + mySlot);
+        document.getElementById('status').innerText = "Online (" + mySlot + ")";
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        
+        // Erst nach erfolgreichem Login Partner suchen
+        setInterval(discoverPeers, 10000); 
+    });
 
-            peer.on('error', (err) => {
-                console.error("PeerJS Fehler:", err);
-                if (err.type === 'network-dedicated') setTimeout(initPeer, 5000);
-            });
+    peer.on('error', (err) => {
+        console.error("PeerJS Fehler:", err.type);
+        // Bei Netzwerkfehlern NICHT sofort neu starten, sondern 10 Sek warten
+        if (err.type === 'network' || err.type === 'server-error') {
+            document.getElementById('status').innerText = "Server-Pause...";
+            if (!reconnectTimer) {
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
+                    initPeer();
+                }, 10000); 
+            }
         }
+    });
+}
 
         initPeer();
 
