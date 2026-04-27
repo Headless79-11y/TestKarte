@@ -7,13 +7,13 @@
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
-    
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
+        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; overflow: hidden; }
         #map { height: 100vh; width: 100%; }
         .status-box {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
@@ -30,32 +30,38 @@
     <div id="map"></div>
 
     <script>
-        // 1. Karte & Tiles
+        // 1. KARTEN SETUP
         var map = L.map('map').setView([47.6, 13.3], 7);
         var markers = {};
         var connections = {};
-        const ROOM_PREFIX = "at-map-z10-"; // Dein privater "Kanal"
+        
+        // DEINE AKTUELLE CLOUDFLARE URL (Immer hier anpassen!)
+        const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
 
-        L.tileLayer('https://eddie-cigarette-cleared-tooth.trycloudflare.com/styles/basic-preview/{z}/{x}/{y}.png', {
+        L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
             maxZoom: 20,
             attribution: 'Österreich Live Map'
         }).addTo(map);
         map.setMaxZoom(20);
+
+        // Suche wieder aktivieren (Fix für image_79499c.png)
         L.Control.geocoder().addTo(map);
 
-        // 2. PeerJS mit fester ID-Logik
-        // Erzeugt eine ID wie "at-map-z10-12345"
-        const myShortId = Math.floor(Math.random() * 10000);
-        const peer = new Peer(ROOM_PREFIX + myShortId);
+        // 2. AUTOMATISCHE FINDUNG
+        // Wir nutzen eine Liste von 5 festen "Plätzen". Dein Handy probiert alle durch.
+        const ROOM_ID = "unser-privater-raum-"; 
+        let mySlot = Math.floor(Math.random() * 5) + 1; // Slot 1 bis 5
+        const peer = new Peer(ROOM_ID + mySlot);
         let myLastPos = null;
 
         peer.on('open', (id) => {
-            console.log('Eingeloggt als:', id);
-            autoDiscovery(id);
+            console.log("Eingeloggt auf Slot: " + mySlot);
+            document.getElementById('status').innerText = "Online (Slot " + mySlot + ")";
+            startAutoDiscovery();
         });
 
-        // 3. Standort-Logik
-        map.locate({setView: true, maxZoom: 15, watch: true});
+        // 3. STANDORT LOGIK
+        map.locate({setView: true, maxZoom: 16, watch: true});
 
         map.on('locationfound', (e) => {
             myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng };
@@ -64,50 +70,48 @@
             } else {
                 markers["me"].setLatLng(e.latlng);
             }
-            // Position an alle aktiven Partner senden
+            // Sende an alle aktiven Partner
             Object.values(connections).forEach(conn => {
                 if (conn.open) conn.send(myLastPos);
             });
         });
 
-        // 4. Automatische Partnersuche (Scannt den "Kanal")
-        async function autoDiscovery(myFullId) {
-            document.getElementById('status').innerText = "Scanne Kanal...";
-            
-            // Da PeerJS keine Liste bietet, "pingen" wir einfach die Umgebung an
-            // Wir warten kurz, bis andere online kommen könnten
-            setInterval(() => {
-                // In einer einfachen Version warten wir auf eingehende Anrufe
-                // oder du könntest hier eine Liste von IDs probieren.
-                // PeerJS verbindet sich automatisch, wenn jemand deine ID "kennt"
-            }, 5000);
+        // 4. PARTNER AUTOMATISCH ANRUFEN
+        function startAutoDiscovery() {
+            // Probiere alle 5 Slots durch, außer meinen eigenen
+            for (let i = 1; i <= 5; i++) {
+                if (i === mySlot) continue;
+                const conn = peer.connect(ROOM_ID + i);
+                setupConn(conn);
+            }
         }
 
-        // Empfange Verbindungen von anderen
         peer.on('connection', (conn) => {
             setupConn(conn);
         });
 
         function setupConn(conn) {
-            if (connections[conn.peer]) return; // Schon verbunden
-            
+            if (connections[conn.peer]) return;
             connections[conn.peer] = conn;
+
             conn.on('data', (data) => {
                 if (data.lat && data.lon) {
                     if (!markers[conn.peer]) {
-                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Partner");
+                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Partner " + conn.peer.replace(ROOM_ID, ""));
                     } else {
                         markers[conn.peer].setLatLng([data.lat, data.lon]);
                     }
                     updateCount();
                 }
             });
+
             conn.on('open', () => {
                 if (myLastPos) conn.send(myLastPos);
                 updateCount();
             });
+
             conn.on('close', () => {
-                map.removeLayer(markers[conn.peer]);
+                if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
                 delete connections[conn.peer];
                 updateCount();
             });
@@ -116,7 +120,7 @@
         function updateCount() {
             const count = Object.keys(connections).length;
             document.getElementById('peer-count').innerText = count;
-            document.getElementById('status').innerText = count > 0 ? "Live verbunden" : "Warte auf Partner...";
+            document.getElementById('status').innerText = count > 0 ? "Team Live" : "Suche...";
         }
 
     </script>
