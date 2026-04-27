@@ -38,6 +38,11 @@
         }).addTo(map);
         map.setMaxZoom(20);
 
+// Suchfunktion hinzufügen
+var geocoder = L.Control.geocoder({
+    defaultMarkGeocode: true
+}).addTo(map);
+        
         // 2. PeerJS Setup
         const peer = new Peer();
         let myLastPos = null;
