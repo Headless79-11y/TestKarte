@@ -3,66 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map - AutoTeam</title>
-
+    <title>Live Map - Final Fix</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
-    
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-
     <style>
         body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; overflow: hidden; }
         #map { height: 100vh; width: 100%; }
         .status-box {
-            position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: white; padding: 12px; border-radius: 8px; border: 1px solid #ccc; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            position: absolute; bottom: 20px; right: 10px; z-index: 1000;
+            background: white; padding: 12px; border-radius: 8px; border: 1px solid #ccc;
         }
+        .log { font-size: 10px; color: #666; max-height: 50px; overflow: hidden; }
     </style>
 </head>
 <body>
-
     <div class="status-box">
-        <strong>Status:</strong> <span id="status">Suche Partner...</span><br>
-        <strong>Partner aktiv:</strong> <span id="peer-count">0</span>
+        <strong>Status:</strong> <span id="status">Suche...</span><br>
+        <strong>Partner:</strong> <span id="peer-count">0</span><br>
+        <div class="log" id="log">Warte auf Daten...</div>
+        <button onclick="fitAllMarkers()" style="margin-top:5px;">Alle zentrieren</button>
     </div>
     <div id="map"></div>
 
     <script>
-        // 1. KARTEN SETUP
         var map = L.map('map').setView([47.6, 13.3], 7);
         var markers = {};
         var connections = {};
-        
-        // DEINE AKTUELLE CLOUDFLARE URL (Immer hier anpassen!)
+        var myLastPos = null;
+
+        // --- WICHTIG: DEINE AKTUELLER TUNNEL ---
         const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
 
         L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
-            maxZoom: 20,
-            attribution: 'Österreich Live Map'
+            maxZoom: 20, attribution: 'Österreich Live Map'
         }).addTo(map);
-        map.setMaxZoom(20);
+        L.Control.geocoder({position: 'topleft'}).addTo(map);
 
-        // Suche wieder aktivieren (Fix für image_79499c.png)
-        L.Control.geocoder().addTo(map);
-
-        // 2. AUTOMATISCHE FINDUNG
-        // Wir nutzen eine Liste von 5 festen "Plätzen". Dein Handy probiert alle durch.
-        const ROOM_ID = "unser-privater-raum-"; 
-        let mySlot = Math.floor(Math.random() * 5) + 1; // Slot 1 bis 5
-        const peer = new Peer(ROOM_ID + mySlot);
-        let myLastPos = null;
+        // Wir nutzen 10 feste Slots für die automatische Findung
+        const ROOM_PREFIX = "at-map-v3-"; 
+        const mySlot = Math.floor(Math.random() * 10) + 1;
+        const peer = new Peer(ROOM_PREFIX + mySlot);
 
         peer.on('open', (id) => {
-            console.log("Eingeloggt auf Slot: " + mySlot);
             document.getElementById('status').innerText = "Online (Slot " + mySlot + ")";
-            startAutoDiscovery();
+            setInterval(discoverPeers, 5000); // Alle 5 Sek. nach Partnern suchen
         });
 
-        // 3. STANDORT LOGIK
+        // Standort finden
         map.locate({setView: true, maxZoom: 16, watch: true});
-
         map.on('locationfound', (e) => {
             myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng };
             if (!markers["me"]) {
@@ -70,59 +61,61 @@
             } else {
                 markers["me"].setLatLng(e.latlng);
             }
-            // Sende an alle aktiven Partner
-            Object.values(connections).forEach(conn => {
-                if (conn.open) conn.send(myLastPos);
-            });
         });
 
-        // 4. PARTNER AUTOMATISCH ANRUFEN
-        function startAutoDiscovery() {
-            // Probiere alle 5 Slots durch, außer meinen eigenen
-            for (let i = 1; i <= 5; i++) {
+        // AUTOMATISCHES SENDEN (Alle 2 Sekunden)
+        setInterval(() => {
+            if (myLastPos) {
+                Object.values(connections).forEach(conn => {
+                    if (conn.open) {
+                        conn.send(myLastPos);
+                        console.log("Sende an " + conn.peer);
+                    }
+                });
+            }
+        }, 2000);
+
+        function discoverPeers() {
+            for (let i = 1; i <= 10; i++) {
                 if (i === mySlot) continue;
-                const conn = peer.connect(ROOM_ID + i);
-                setupConn(conn);
+                const targetId = ROOM_PREFIX + i;
+                if (!connections[targetId]) {
+                    const conn = peer.connect(targetId);
+                    setupConn(conn);
+                }
             }
         }
 
-        peer.on('connection', (conn) => {
-            setupConn(conn);
-        });
+        peer.on('connection', (conn) => setupConn(conn));
 
         function setupConn(conn) {
-            if (connections[conn.peer]) return;
             connections[conn.peer] = conn;
-
             conn.on('data', (data) => {
+                document.getElementById('log').innerText = "Daten von Slot " + conn.peer.replace(ROOM_PREFIX, "");
                 if (data.lat && data.lon) {
                     if (!markers[conn.peer]) {
-                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Partner " + conn.peer.replace(ROOM_ID, ""));
+                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Partner " + conn.peer.replace(ROOM_PREFIX, ""));
                     } else {
                         markers[conn.peer].setLatLng([data.lat, data.lon]);
                     }
-                    updateCount();
                 }
+                updateUI();
             });
-
-            conn.on('open', () => {
-                if (myLastPos) conn.send(myLastPos);
-                updateCount();
-            });
-
             conn.on('close', () => {
                 if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
                 delete connections[conn.peer];
-                updateCount();
+                updateUI();
             });
         }
 
-        function updateCount() {
-            const count = Object.keys(connections).length;
-            document.getElementById('peer-count').innerText = count;
-            document.getElementById('status').innerText = count > 0 ? "Team Live" : "Suche...";
+        function updateUI() {
+            document.getElementById('peer-count').innerText = Object.keys(connections).length;
         }
 
+        function fitAllMarkers() {
+            var group = new L.featureGroup(Object.values(markers));
+            if (group.getLayers().length > 0) map.fitBounds(group.getBounds().pad(0.2));
+        }
     </script>
 </body>
 </html>
