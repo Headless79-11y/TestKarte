@@ -32,10 +32,11 @@
         var map = L.map('map').setView([47.6, 13.3], 7);
         var markers = {};
 
-        L.tileLayer('https://snake-saw-belongs-clocks.trycloudflare.com', {
-            maxZoom: 20,
-            attribution: 'Österreich Live Map'
-        }).addTo(map);
+      
+L.tileLayer('https://snake-saw-belongs-clocks.trycloudflare.com/styles/basic-preview/256/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: 'Österreich Live Map'
+}).addTo(map);
 
         // 2. PeerJS Initialisierung
         const peer = new Peer();
