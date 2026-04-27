@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>test</title>
+    <title>Live Map - Team</title>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
     <style>
@@ -15,71 +14,113 @@
         #map { height: 100vh; width: 100%; }
         .status-box {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: white; padding: 10px; border-radius: 5px; border: 1px solid #ccc;
+            background: white; padding: 10px; border-radius: 5px; border: 1px solid #ccc; font-size: 12px;
         }
     </style>
 </head>
 <body>
 
     <div class="status-box">
-        <strong>Status:</strong> <span id="status">Verbinde...</span><br>
-        <strong>Deine ID:</strong> <span id="my-id">-</span>
+        <strong>Status:</strong> <span id="status">Initialisiere...</span><br>
+        <strong>Partner aktiv:</strong> <span id="peer-count">0</span>
     </div>
     <div id="map"></div>
 
     <script>
-        // 1. Karte initialisieren (Zentriert auf Österreich)
+        // 1. Karte initialisieren
         var map = L.map('map').setView([47.6, 13.3], 7);
         var markers = {};
+        var connections = {};
 
-      
-L.tileLayer('https://eddie-cigarette-cleared-tooth.trycloudflare.com/styles/basic-preview/{z}/{x}/{y}.png', {
-    maxZoom: 20, // Hier von 18 auf 20 hochgehen
-    attribution: 'Österreich Live Map'
-}).addTo(map);
+        L.tileLayer('https://eddie-cigarette-cleared-tooth.trycloudflare.com/styles/basic-preview/{z}/{x}/{y}.png', {
+            maxZoom: 20,
+            attribution: 'Österreich Live Map'
+        }).addTo(map);
+        map.setMaxZoom(20);
 
-// WICHTIG: Füge diese Zeile direkt darunter ein:
-map.setMaxZoom(20);
-
-        // 2. PeerJS Initialisierung
+        // 2. PeerJS Setup
         const peer = new Peer();
-        
+        let myLastPos = null;
+
         peer.on('open', (id) => {
-            document.getElementById('my-id').innerText = id;
-            document.getElementById('status').innerText = "Bereit (Warte auf Partner)";
-            console.log('Meine Peer-ID ist: ' + id);
+            document.getElementById('status').innerText = "Suche Partner...";
+            // Wir nutzen einen öffentlichen Raum-Namen "meine-geheim-karte-123"
+            const room = "meine-geheim-karte-123"; 
+            registerAndConnect(id, room);
         });
 
-        // 3. Standort finden und senden
+        // 3. Standort finden & automatisch an alle Partner senden
         map.locate({setView: true, maxZoom: 15, watch: true});
 
         map.on('locationfound', (e) => {
-            const myPos = { lat: e.latlng.lat, lon: e.latlng.lng };
+            myLastPos = { lat: e.latlng.lat, lon: e.latlng.lng };
             
-            // Eigenen Marker setzen/bewegen
             if (!markers["me"]) {
-                markers["me"] = L.marker(e.latlng, {title: "Ich"}).addTo(map).bindPopup("Das bin ich").openPopup();
+                markers["me"] = L.marker(e.latlng, {zIndexOffset: 1000}).addTo(map).bindPopup("Ich").openPopup();
             } else {
                 markers["me"].setLatLng(e.latlng);
             }
 
-            // Hier müsstest du die ID deines Freundes eingeben, um ihm die Daten zu senden
-            // (In einer Profi-Version würde man hier eine Liste von IDs abfragen)
-        });
-
-        // 4. Empfangen von Daten anderer Personen
-        peer.on('connection', (conn) => {
-            conn.on('data', (data) => {
-                if (data.lat && data.lon) {
-                    if (!markers[conn.peer]) {
-                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Person: " + conn.peer);
-                    } else {
-                        markers[conn.peer].setLatLng([data.lat, data.lon]);
-                    }
-                }
+            // Sende meine Position an alle verbundenen Partner
+            Object.values(connections).forEach(conn => {
+                if (conn.open) conn.send(myLastPos);
             });
         });
 
+        // 4. Eingehende Verbindungen handhaben
+        peer.on('connection', (conn) => {
+            setupConn(conn);
+        });
+
+        function setupConn(conn) {
+            connections[conn.peer] = conn;
+            conn.on('data', (data) => {
+                if (data.lat && data.lon) {
+                    if (!markers[conn.peer]) {
+                        markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map).bindPopup("Partner: " + conn.peer);
+                    } else {
+                        markers[conn.peer].setLatLng([data.lat, data.lon]);
+                    }
+                    updatePeerCount();
+                }
+            });
+            conn.on('open', () => {
+                if (myLastPos) conn.send(myLastPos);
+                updatePeerCount();
+            });
+        }
+
+        function updatePeerCount() {
+            document.getElementById('peer-count').innerText = Object.keys(connections).length;
+            document.getElementById('status').innerText = "Live";
+        }
+
+        // 5. Automatisches "Finden" anderer Nutzer über eine einfache API
+        async function registerAndConnect(myId, room) {
+            const url = `https://kvbin.com/api/v1/rooms/${room}/peers`;
+            
+            // 1. Mich selbst anmelden
+            try {
+                await fetch(url, {
+                    method: 'POST',
+                    body: JSON.stringify({id: myId, time: Date.now()}),
+                    headers: {'Content-Type': 'application/json'}
+                });
+
+                // 2. Andere IDs abrufen
+                const response = await fetch(url);
+                const peers = await response.json();
+                
+                peers.forEach(p => {
+                    if (p.id !== myId && !connections[p.id]) {
+                        const conn = peer.connect(p.id);
+                        setupConn(conn);
+                    }
+                });
+            } catch (e) {
+                console.log("Auto-Connect fehlgeschlagen, warte auf Partner...");
+            }
+        }
     </script>
 </body>
 </html>
