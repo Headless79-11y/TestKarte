@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map5 - Stable</title>
+    <title>Live Map v10 - Fixed</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <style>
@@ -12,7 +12,7 @@
         .status-box {
             position: absolute; bottom: 20px; right: 10px; z-index: 1000;
             background: white; padding: 15px; border-radius: 8px; border: 1px solid #333;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3); min-width: 180px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3); min-width: 200px;
         }
     </style>
 </head>
@@ -21,7 +21,7 @@
         <strong>Gerät:</strong> <span id="display-name">...</span><br>
         <strong>Netzwerk:</strong> <span id="status" style="color: orange;">Initialisiere...</span><br>
         <strong>Partner:</strong> <span id="peer-count">0</span>
-        <div id="debug-log" style="font-size: 10px; color: #666; margin-top: 5px;"></div>
+        <div id="debug-log" style="font-size: 10px; color: #666; margin-top: 5px; border-top: 1px solid #ddd; padding-top: 5px;"></div>
     </div>
     <div id="map"></div>
 
@@ -30,31 +30,34 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
     <script>
-        const log = (msg) => { document.getElementById('debug-log').innerText = msg; console.log(msg); };
+        const log = (msg) => { 
+            const d = new Date();
+            const time = d.getHours() + ":" + d.getMinutes() + ":" + d.getSeconds();
+            document.getElementById('debug-log').innerText = time + " - " + msg; 
+        };
         
         window.onload = () => {
-            let myName = localStorage.getItem('chatName') || prompt("Dein Name?", "User-" + Math.floor(Math.random()*100));
-            localStorage.setItem('chatName', myName);
+            const nr = prompt("Bist du Gerät 1 oder 2?", "1");
+            let myName = localStorage.getItem('chatName') || "User-" + nr;
             document.getElementById('display-name').innerText = myName;
 
+            // Karte Setup
             const map = L.map('map').setView([47.6, 13.3], 7);
             const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
             
             L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { 
                 maxZoom: 20,
-                errorTileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' // Fallback falls Tunnel hakt
+                errorTileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
             }).addTo(map);
 
             if (typeof L.Control.Geocoder !== 'undefined') {
                 L.Control.geocoder().addTo(map);
             }
 
-            // --- STABILE NETZWERK LOGIK ---
-            const ROOM = "at-stable-v9-"; 
-            const mySlot = prompt("Bist du Gerät 1 oder 2?", "1");
-            const myId = ROOM + mySlot;
-            const targetId = ROOM + (mySlot == "1" ? "2" : "1");
-
+            // PeerJS Config
+            const ROOM = "at-stable-v10-"; 
+            const myId = ROOM + nr;
+            const targetId = ROOM + (nr == "1" ? "2" : "1");
             let peer = null;
             let connections = {};
             let markers = {};
@@ -62,6 +65,84 @@
             function startPeer() {
                 if (peer) peer.destroy();
                 
-                // STUN Server helfen, die "Peer Unavailable" Fehler im Mobilfunk/WLAN zu lösen
                 peer = new Peer(myId, {
                     debug: 1,
+                    config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
+                });
+
+                peer.on('open', (id) => {
+                    document.getElementById('status').innerText = "✅ Online (Slot " + nr + ")";
+                    document.getElementById('status').style.color = "green";
+                    log("ID registriert.");
+                    setInterval(findPartner, 15000);
+                });
+
+                peer.on('error', (err) => {
+                    log("Fehler: " + err.type);
+                    if (err.type === 'network') {
+                        document.getElementById('status').innerText = "❌ Netz-Fehler";
+                        setTimeout(startPeer, 20000);
+                    }
+                });
+
+                peer.on('connection', setupConn);
+            }
+
+            function setupConn(conn) {
+                if (connections[conn.peer]) return;
+                
+                connections[conn.peer] = conn;
+                conn.on('data', (data) => {
+                    // Validierung der Daten [Wie von dir vorgeschlagen!]
+                    if (data && typeof data.lat === 'number' && typeof data.lon === 'number') {
+                        if (!markers[conn.peer]) {
+                            markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map)
+                                .bindTooltip(data.name || "Partner", {permanent:true});
+                        } else {
+                            markers[conn.peer].setLatLng([data.lat, data.lon]);
+                        }
+                    }
+                    const activeCount = Object.values(connections).filter(c => c.open).length;
+                    document.getElementById('peer-count').innerText = activeCount;
+                });
+
+                conn.on('close', () => {
+                    if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
+                    delete connections[conn.peer];
+                });
+            }
+
+            function findPartner() {
+                // Nur verbinden, wenn Partner nicht schon aktiv ist
+                if (peer && !peer.disconnected && (!connections[targetId] || !connections[targetId].open)) {
+                    log("Suche Partner...");
+                    setupConn(peer.connect(targetId));
+                }
+            }
+
+            // GPS Management
+            map.locate({watch: true, setView: true, maxZoom: 16});
+            
+            map.on('locationfound', (e) => {
+                let pos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
+                if (!markers["me"]) {
+                    markers["me"] = L.marker(e.latlng).addTo(map).bindTooltip("Ich", {permanent:true});
+                } else {
+                    markers["me"].setLatLng(e.latlng);
+                }
+                // Senden
+                Object.values(connections).forEach(c => { if(c.open) c.send(pos); });
+            });
+
+            // Fehlerbehandlung für GPS [Neu hinzugefügt!]
+            map.on('locationerror', (e) => {
+                log("GPS Fehler: " + e.message);
+                document.getElementById('status').innerText = "❌ Standort-Fehler";
+                document.getElementById('status').style.color = "red";
+            });
+
+            startPeer();
+        };
+    </script>
+</body>
+</html>
