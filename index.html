@@ -119,15 +119,12 @@
                 document.getElementById('status-text').innerText = "Online (Slot " + slotNum + ")";
                 document.getElementById('status-text').style.color = "green";
                 startTracking();
-                // Sofort-Scan beim Start
                 searchPartners();
-                // Danach alle 3 Sekunden
                 setInterval(searchPartners, 3000);
             });
 
             peer.on('connection', (conn) => {
                 handleConn(conn);
-                // WICHTIG: Sobald uns jemand findet, schicken wir sofort unsere Position zurück!
                 if(lastPos) conn.send(lastPos); 
             });
         }
