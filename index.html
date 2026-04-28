@@ -1,219 +1,72 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team-Karte v12 - Pro</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
-    <style>
-        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; }
-        #map { height: 100vh; width: 100%; }
-        .overlay {
-            position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: rgba(255, 255, 255, 0.9); padding: 15px; border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.15); backdrop-filter: blur(5px);
+// Tausche die startNetworking Funktion gegen diese stabilere Version aus:
+
+function startNetworking(slotNum) {
+    // Falls schon ein Peer existiert (z.B. vom Scannen), weg damit
+    if (peer) peer.destroy();
+
+    peer = new Peer(ROOM_ID + slotNum, {
+        config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
+    });
+
+    peer.on('open', () => {
+        document.getElementById('status-text').innerText = "Online (Slot " + slotNum + ")";
+        document.getElementById('status-text').style.color = "green";
+        startLocationTracking();
+        setInterval(connectToOthers, 10000);
+    });
+
+    // DAS HIER IST NEU: Abfangen, wenn Slot schon belegt ist
+    peer.on('error', (err) => {
+        if (err.type === 'id-taken') {
+            alert("Hoppla! Slot " + slotNum + " wurde gerade eben von jemand anderem geschnappt. Bitte wähle einen anderen.");
+            localStorage.removeItem('map_user_slot'); // Slot-Speicher löschen
+            location.reload(); // Zurück zur Auswahl
+        } else {
+            console.error("PeerJS Fehler:", err.type);
         }
-        .slot-picker {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8); z-index: 2000; display: flex;
-            align-items: center; justify-content: center; color: white;
-        }
-        .picker-content { background: #333; padding: 25px; border-radius: 15px; text-align: center; max-width: 90%; }
-        .slot-btn { 
-            padding: 10px 15px; margin: 5px; border: none; border-radius: 5px; 
-            cursor: pointer; background: #444; color: white; transition: 0.3s;
-        }
-        .slot-btn:hover { background: #666; }
-        .slot-btn.taken { background: #8e44ad; opacity: 0.5; cursor: not-allowed; }
-        .slot-btn.free { background: #27ae60; }
-        .hidden { display: none !important; }
-    </style>
-</head>
-<body>
+    });
 
-    <div id="slot-screen" class="slot-picker hidden">
-        <div class="picker-content">
-            <h3>Wähle einen freien Slot</h3>
-            <p id="scan-status">Scanne Netzwerk nach freien Plätzen...</p>
-            <div id="slot-list"></div>
-            <button onclick="clearData()" style="margin-top:20px; background:none; border:none; color:#aaa; text-decoration:underline; cursor:pointer;">Daten zurücksetzen</button>
-        </div>
-    </div>
+    peer.on('connection', handleConnection);
+}
 
-    <div class="overlay">
-        <strong><span id="display-name">...</span></strong> <br>
-        <small>Status: <span id="status-text">Initialisiere...</span></small>
-        <hr style="border:0; border-top:1px solid #ddd; margin: 8px 0;">
-        Partner online: <span id="peer-count">0</span>
-    </div>
+// Und die Scan-Funktion etwas verlangsamen, damit sie genauer wird:
+async function showSlotPicker() {
+    const screen = document.getElementById('slot-screen');
+    const list = document.getElementById('slot-list');
+    screen.classList.remove('hidden');
+    list.innerHTML = "Scanne Slots...";
 
-    <div id="map"></div>
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-
-    <script>
-        const ROOM_ID = "austria-v12-";
-        let myName = localStorage.getItem('map_user_name');
-        let mySlot = localStorage.getItem('map_user_slot');
-        let peer, map, myMarker;
-        let markers = {};
-        let connections = {};
-        let isFirstLocation = true;
-
-        window.onload = init;
-
-        function init() {
-            // Namen merken
-            if (!myName) {
-                myName = prompt("Wie möchtest du auf der Karte heißen?", "User");
-                if(!myName) myName = "Unbekannt";
-                localStorage.setItem('map_user_name', myName);
-            }
-            document.getElementById('display-name').innerText = myName;
-
-            // Karte initialisieren
-            map = L.map('map', { zoomControl: false }).setView([47.6, 13.3], 7);
-            L.control.zoom({ position: 'bottomleft' }).addTo(map);
+    // Wir erstellen einen temporären Scanner
+    const scanner = new Peer();
+    
+    // Kurze Pause, damit der Scanner-Peer bereit ist
+    setTimeout(async () => {
+        list.innerHTML = "";
+        for (let i = 1; i <= 8; i++) {
+            const btn = document.createElement('button');
+            btn.className = "slot-btn";
+            btn.innerText = "Slot " + i;
             
-            const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
-            L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
-                maxZoom: 20, errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
-            }).addTo(map);
-            L.Control.geocoder({ position: 'topleft' }).addTo(map);
-
-            // Slot Check
-            if (!mySlot) {
-                showSlotPicker();
-            } else {
-                startNetworking(mySlot);
-            }
-        }
-
-        async function showSlotPicker() {
-            const screen = document.getElementById('slot-screen');
-            const list = document.getElementById('slot-list');
-            screen.classList.remove('hidden');
-            list.innerHTML = "";
-
-            // Temporärer Peer zum Scannen
-            const scanner = new Peer();
+            // Wir "rufen" den Slot an
+            const conn = scanner.connect(ROOM_ID + i);
             
-            for (let i = 1; i <= 8; i++) {
-                const btn = document.createElement('button');
-                btn.className = "slot-btn";
-                btn.innerText = "Slot " + i;
-                
-                // Wir versuchen kurz zu verbinden, um zu sehen ob besetzt
-                const conn = scanner.connect(ROOM_ID + i);
-                let isTaken = false;
-                
-                const checkTimeout = setTimeout(() => {
-                    btn.classList.add('free');
-                    btn.onclick = () => selectSlot(i);
-                    conn.close();
-                }, 1500);
+            // Wenn nach 2 Sekunden keine Verbindung "open" ist, 
+            // gehen wir davon aus, dass er frei ist (oder der Partner nicht reagiert)
+            let timeout = setTimeout(() => {
+                btn.classList.add('free');
+                btn.onclick = () => selectSlot(i);
+                conn.close();
+            }, 2000);
 
-                conn.on('open', () => {
-                    clearTimeout(checkTimeout);
-                    btn.classList.add('taken');
-                    btn.innerText += " (Besetzt)";
-                    conn.close();
-                });
-                list.appendChild(btn);
-            }
-            document.getElementById('scan-status').innerText = "Scan abgeschlossen. Wähle einen grünen Slot.";
-        }
-
-        function selectSlot(num) {
-            mySlot = num;
-            localStorage.setItem('map_user_slot', num);
-            document.getElementById('slot-screen').classList.add('hidden');
-            location.reload(); // Seite neu laden mit festem Slot
-        }
-
-        function startNetworking(slotNum) {
-            peer = new Peer(ROOM_ID + slotNum, {
-                config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
+            conn.on('open', () => {
+                clearTimeout(timeout);
+                btn.classList.add('taken');
+                btn.innerText += " (Besetzt)";
+                btn.disabled = true;
+                conn.close();
             });
-
-            peer.on('open', () => {
-                document.getElementById('status-text').innerText = "Online (Slot " + slotNum + ")";
-                startLocationTracking();
-                setInterval(connectToOthers, 10000);
-            });
-
-            peer.on('connection', handleConnection);
+            list.appendChild(btn);
         }
-
-        function startLocationTracking() {
-            // Hintergrund-Modus: Wir fordern hohe Genauigkeit an
-            map.locate({ watch: true, setView: false, enableHighAccuracy: true });
-            
-            map.on('locationfound', (e) => {
-                if (isFirstLocation) {
-                    map.setView(e.latlng, 15);
-                    isFirstLocation = false;
-                }
-                const data = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
-                updateMarker('me', data);
-                broadcastPosition(data);
-            });
-        }
-
-        function handleConnection(conn) {
-            connections[conn.peer] = conn;
-            conn.on('data', (data) => {
-                if (data.lat && data.lon) updateMarker(conn.peer, data);
-            });
-            conn.on('close', () => {
-                if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
-                delete connections[conn.peer];
-                updatePeerCount();
-            });
-        }
-
-        function connectToOthers() {
-            for (let i = 1; i <= 8; i++) {
-                const target = ROOM_ID + i;
-                if (target !== ROOM_ID + mySlot && (!connections[target] || !connections[target].open)) {
-                    const conn = peer.connect(target);
-                    handleConnection(conn);
-                }
-            }
-            updatePeerCount();
-        }
-
-        function broadcastPosition(pos) {
-            Object.values(connections).forEach(c => {
-                if (c.open) c.send(pos);
-            });
-        }
-
-        function updateMarker(id, data) {
-            const isMe = id === 'me';
-            const color = isMe ? '#3498db' : '#e74c3c';
-            const label = isMe ? "Ich (" + data.name + ")" : data.name;
-
-            if (!markers[id]) {
-                markers[id] = L.circleMarker([data.lat, data.lon], {
-                    radius: 10, fillColor: color, color: "#white", weight: 2, fillOpacity: 0.9
-                }).addTo(map).bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -10] });
-            } else {
-                markers[id].setLatLng([data.lat, data.lon]);
-            }
-        }
-
-        function updatePeerCount() {
-            document.getElementById('peer-count').innerText = Object.values(connections).filter(c=>c.open).length;
-        }
-
-        function clearData() {
-            localStorage.clear();
-            location.reload();
-        }
-    </script>
-</body>
-</html>
+        document.getElementById('scan-status').innerText = "Scan fertig.";
+    }, 1000);
+}
