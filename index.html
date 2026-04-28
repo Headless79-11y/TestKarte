@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team-Karte v14 - Live Status</title>
+    <title>Team-Karte v15 - High-Speed</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <style>
@@ -40,7 +40,7 @@
     <div id="slot-screen" class="slot-picker hidden">
         <div class="picker-content">
             <h2>Wer bist du?</h2>
-            <div id="name-setup">
+            <div id="name-up">
                 <input type="text" id="name-input" placeholder="Dein Name..." style="padding:10px; border-radius:5px; border:none; width:80%;">
                 <p id="scan-msg" style="margin-top:20px; font-size: 0.9em; color: #aaa;">Scanne Netzwerk...</p>
             </div>
@@ -74,6 +74,7 @@
         window.onload = init;
 
         function init() {
+            // Fix: setView statt View
             map = L.map('map', { zoomControl: false }).setView([47.6, 13.3], 7);
             const tunnelUrl = 'https://output-studio-jobs-able.trycloudflare.com';
             
@@ -97,7 +98,6 @@
             screen.classList.remove('hidden');
             const list = document.getElementById('slot-list');
             list.innerHTML = "";
-            
             const scanner = new Peer(); 
             
             setTimeout(async () => {
@@ -105,13 +105,12 @@
                     const btn = document.createElement('button');
                     btn.className = "slot-btn";
                     btn.innerText = i;
-                    
                     const conn = scanner.connect(ROOM_PREFIX + i);
                     let timeout = setTimeout(() => {
                         btn.classList.add('free');
                         btn.onclick = () => selectSlot(i);
                         conn.close();
-                    }, 1500);
+                    }, 1200);
 
                     conn.on('open', () => {
                         clearTimeout(timeout);
@@ -121,7 +120,7 @@
                     });
                     list.appendChild(btn);
                 }
-                document.getElementById('scan-msg').innerText = "Wähle einen grünen Slot:";
+                document.getElementById('scan-msg').innerText = "Wähle einen freien Slot:";
             }, 800);
         }
 
@@ -142,12 +141,13 @@
                 document.getElementById('status-text').innerText = "Online (Slot " + slotNum + ")";
                 document.getElementById('status-text').style.color = "green";
                 startTracking();
-                setInterval(searchPartners, 10000);
+                // Schnellere Suche (3 Sek statt 5/10)
+                setInterval(searchPartners, 3000);
             });
 
             peer.on('error', (err) => {
                 if (err.type === 'id-taken') {
-                    alert("Dieser Slot ist leider besetzt.");
+                    alert("Slot besetzt.");
                     localStorage.removeItem('map_slot');
                     location.reload();
                 }
@@ -157,7 +157,14 @@
         }
 
         function startTracking() {
-            map.locate({ watch: true, setView: false, enableHighAccuracy: true });
+            // Aggressives Tracking
+            map.locate({ 
+                watch: true, 
+                setView: false, 
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 5000 
+            });
             map.on('locationfound', (e) => {
                 if (isFirstLocate) { map.setView(e.latlng, 15); isFirstLocate = false; }
                 const pos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
@@ -197,12 +204,11 @@
             const isMe = id === 'me';
             const now = new Date().toLocaleTimeString();
             
-            // Verhindert perfektes Überlappen (Spider-Effekt)
             let displayLat = data.lat;
             let displayLon = data.lon;
             if (!isMe) {
-                displayLat += (Math.random() - 0.5) * 0.0001;
-                displayLon += (Math.random() - 0.5) * 0.0001;
+                displayLat += (Math.random() - 0.5) * 0.00012;
+                displayLon += (Math.random() - 0.5) * 0.00012;
             }
 
             if (!markers[id]) {
@@ -222,15 +228,18 @@
                     offset: [0, -12] 
                 });
             } else {
-                markers[id].setLatLng([displayLat, displayLon]);
+                // Sanfte Animation zur neuen Position
+                markers[id].setLatLng([displayLat, displayLon], {
+                    animate: true,
+                    duration: 0.5
+                });
             }
 
-            // Popup mit letztem Zeitstempel aktualisieren
             const popupContent = `
                 <div style="text-align: center; font-size: 13px;">
                     <strong>${data.name}</strong><br>
                     <span style="color: #666;">
-                        ${isMe ? "Deine Position" : "Zuletzt online: <b>" + now + "</b>"}
+                        ${isMe ? "Live-Position" : "Zuletzt empfangen: <b>" + now + "</b>"}
                     </span>
                 </div>
             `;
