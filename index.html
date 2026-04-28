@@ -3,21 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Karte v13</title>
+    <title>Team-Karte v14 - Live Status</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <style>
         body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
         #map { height: 100vh; width: 100%; background: #ddd; }
         
-        /* Overlay Style */
         .overlay {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
             background: rgba(255, 255, 255, 0.95); padding: 12px; border-radius: 10px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2); min-width: 150px;
         }
 
-        /* Slot Picker Fullscreen */
         .slot-picker {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.85); z-index: 2000; display: flex;
@@ -30,7 +28,7 @@
             padding: 15px; border: none; border-radius: 8px; font-weight: bold;
             cursor: pointer; transition: 0.2s; background: #444; color: white;
         }
-        .slot-btn.free { background: #27ae60; cursor: pointer; }
+        .slot-btn.free { background: #27ae60; }
         .slot-btn.taken { background: #c0392b; opacity: 0.6; cursor: not-allowed; }
         .slot-btn:hover:not(.taken) { transform: scale(1.05); }
 
@@ -47,7 +45,7 @@
                 <p id="scan-msg" style="margin-top:20px; font-size: 0.9em; color: #aaa;">Scanne Netzwerk...</p>
             </div>
             <div id="slot-list" class="slot-grid"></div>
-            <button onclick="clearData()" style="color: #666; background: none; border: none; cursor: pointer; text-decoration: underline;">Reset</button>
+            <button onclick="clearData()" style="color: #666; background: none; border: none; cursor: pointer; text-decoration: underline;">Daten zurücksetzen</button>
         </div>
     </div>
 
@@ -55,7 +53,7 @@
         <strong><span id="display-name">...</span></strong><br>
         <small id="status-text" style="color:orange;">Initialisiere...</small>
         <hr style="margin:8px 0; border:0; border-top:1px solid #eee;">
-        Partner: <span id="peer-count">0</span>
+        Partner online: <span id="peer-count">0</span>
     </div>
 
     <div id="map"></div>
@@ -65,7 +63,7 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
     <script>
-        const ROOM_PREFIX = "at-v13-";
+        const ROOM_PREFIX = "at-v14-"; 
         let myName = localStorage.getItem('map_name');
         let mySlot = localStorage.getItem('map_slot');
         let peer, map;
@@ -76,12 +74,14 @@
         window.onload = init;
 
         function init() {
-            // Karte vorbereiten
             map = L.map('map', { zoomControl: false }).setView([47.6, 13.3], 7);
             const tunnelUrl = 'https://output-studio-jobs-able.trycloudflare.com';
+            
             L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
-                maxZoom: 20, errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+                maxZoom: 20, 
+                errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
             }).addTo(map);
+
             L.Control.geocoder({ position: 'topleft' }).addTo(map);
 
             if (!myName || !mySlot) {
@@ -98,7 +98,7 @@
             const list = document.getElementById('slot-list');
             list.innerHTML = "";
             
-            const scanner = new Peer(); // Temporärer Peer zum Scannen
+            const scanner = new Peer(); 
             
             setTimeout(async () => {
                 for (let i = 1; i <= 8; i++) {
@@ -111,7 +111,7 @@
                         btn.classList.add('free');
                         btn.onclick = () => selectSlot(i);
                         conn.close();
-                    }, 1800);
+                    }, 1500);
 
                     conn.on('open', () => {
                         clearTimeout(timeout);
@@ -128,7 +128,6 @@
         function selectSlot(num) {
             const nameInput = document.getElementById('name-input').value;
             if (!nameInput && !myName) { alert("Bitte Namen eingeben!"); return; }
-            
             if (!myName) localStorage.setItem('map_name', nameInput);
             localStorage.setItem('map_slot', num);
             location.reload();
@@ -148,7 +147,7 @@
 
             peer.on('error', (err) => {
                 if (err.type === 'id-taken') {
-                    alert("Slot " + slotNum + " ist bereits belegt! Wähle einen anderen.");
+                    alert("Dieser Slot ist leider besetzt.");
                     localStorage.removeItem('map_slot');
                     location.reload();
                 }
@@ -171,7 +170,7 @@
             if (connections[conn.peer]) return;
             connections[conn.peer] = conn;
             conn.on('data', (data) => {
-                if (data.lat && data.lon) updateMarker(conn.peer, data);
+                if (data && data.lat && data.lon) updateMarker(conn.peer, data);
             });
             conn.on('close', () => {
                 if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
@@ -196,13 +195,46 @@
 
         function updateMarker(id, data) {
             const isMe = id === 'me';
-            if (!markers[id]) {
-                markers[id] = L.circleMarker([data.lat, data.lon], {
-                    radius: 9, fillColor: isMe ? '#3498db' : '#e74c3c', color: "white", weight: 2, fillOpacity: 0.9
-                }).addTo(map).bindTooltip(isMe ? "Ich" : data.name, { permanent: true, direction: 'top', offset: [0, -10] });
-            } else {
-                markers[id].setLatLng([data.lat, data.lon]);
+            const now = new Date().toLocaleTimeString();
+            
+            // Verhindert perfektes Überlappen (Spider-Effekt)
+            let displayLat = data.lat;
+            let displayLon = data.lon;
+            if (!isMe) {
+                displayLat += (Math.random() - 0.5) * 0.0001;
+                displayLon += (Math.random() - 0.5) * 0.0001;
             }
+
+            if (!markers[id]) {
+                const color = isMe ? '#3498db' : '#e74c3c';
+                markers[id] = L.circleMarker([displayLat, displayLon], {
+                    radius: 11, 
+                    fillColor: color, 
+                    color: "white", 
+                    weight: 3, 
+                    fillOpacity: 0.9,
+                    zIndexOffset: isMe ? 1000 : 0 
+                }).addTo(map);
+
+                markers[id].bindTooltip(isMe ? "Ich" : data.name, { 
+                    permanent: true, 
+                    direction: 'top', 
+                    offset: [0, -12] 
+                });
+            } else {
+                markers[id].setLatLng([displayLat, displayLon]);
+            }
+
+            // Popup mit letztem Zeitstempel aktualisieren
+            const popupContent = `
+                <div style="text-align: center; font-size: 13px;">
+                    <strong>${data.name}</strong><br>
+                    <span style="color: #666;">
+                        ${isMe ? "Deine Position" : "Zuletzt online: <b>" + now + "</b>"}
+                    </span>
+                </div>
+            `;
+            markers[id].bindPopup(popupContent);
         }
 
         function updateUI() {
