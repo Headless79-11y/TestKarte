@@ -3,23 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team-Karte Live</title>
+    <title>Team-Karte v11</title>
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <style>
         body, html { margin: 0; padding: 0; height: 100%; font-family: Arial, sans-serif; }
         #map { height: 100vh; width: 100%; background: #e0e0e0; }
-        
         .overlay {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: white; padding: 15px; border-radius: 10px;
-            box-shadow: 0 2px 15px rgba(0,0,0,0.2); border: 1px solid #ccc;
+            background: white; padding: 12px; border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2); font-size: 13px;
         }
-        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; background: red; }
+        .status-dot { height: 8px; width: 8px; border-radius: 50%; display: inline-block; background: red; }
         .online { background: #2ecc71; }
     </style>
 </head>
@@ -27,71 +23,84 @@
 
     <div class="overlay">
         <strong>Status:</strong> <span id="status-text">Verbinde...</span> <span id="dot" class="status-dot"></span><br>
-        <strong>Dein Name:</strong> <span id="my-name-display">...</span><br>
-        <hr>
-        <strong>Partner auf Karte:</strong> <span id="peer-count">0</span>
+        <strong>User:</strong> <span id="my-name-display">...</span> (Slot <span id="my-slot-display">?</span>)<br>
+        <strong>Partner:</strong> <span id="peer-count">0</span>
     </div>
 
     <div id="map"></div>
 
-    <script>
-        // 1. SETUP: Name und Karte
-        const myName = prompt("Dein Name für die Karte:", "User-" + Math.floor(Math.random()*100));
-        document.getElementById('my-name-display').innerText = myName;
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
+    <script>
+        // 1. SPEICHERUNG & SETUP
+        let myName = localStorage.getItem('map_name') || prompt("Dein Name:", "User");
+        let slot = localStorage.getItem('map_slot') || prompt("Wähle Slot (1-10):", "1");
+        
+        localStorage.setItem('map_name', myName);
+        localStorage.setItem('map_slot', slot);
+        
+        document.getElementById('my-name-display').innerText = myName;
+        document.getElementById('my-slot-display').innerText = slot;
+
+        // Karte initialisieren
         const map = L.map('map').setView([47.6, 13.3], 7);
         const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
         
-        // Dein eigener Karten-Server mit Fallback auf OpenStreetMap
         L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
-            maxZoom: 20,
-            errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+            maxZoom: 20, errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
         }).addTo(map);
 
-        // 2. NETZWERK: Wer bin ich?
-        // WICHTIG: Jedes Gerät braucht eine EIGENE Nummer (Slot).
-        const slot = prompt("Wähle eine Nummer (1-10):", "1");
+        // Suchfunktion wieder hinzufügen
+        L.Control.geocoder().addTo(map);
+
+        // 2. NETZWERK
         const myId = "austria-team-slot-" + slot;
-        const peer = new Peer(myId);
-
-        let markers = {}; // Speichert alle Marker (Ich + Partner)
-        let connections = {};
-
-        peer.on('open', (id) => {
-            document.getElementById('status-text').innerText = "Bereit (Slot " + slot + ")";
-            document.getElementById('dot').classList.add('online');
-            
-            // Suche alle 10 Sekunden nach den Slots 1 bis 10
-            setInterval(searchFriends, 10000);
+        const peer = new Peer(myId, {
+            config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
         });
 
-        // 3. STANDORT: Wo bin ich?
-        map.locate({ watch: true, setView: true, maxZoom: 15 });
+        let markers = {};
+        let connections = {};
+        let firstLocate = true; // Flag für einmalige Zentrierung
+
+        peer.on('open', () => {
+            document.getElementById('status-text').innerText = "Online";
+            document.getElementById('dot').classList.add('online');
+            setInterval(searchFriends, 5000); // Schnellerer Suchlauf
+        });
+
+        // 3. STANDORT & AKTUALISIERUNG
+        // Wir nutzen "highAccuracy" für bessere Daten
+        map.locate({ watch: true, setView: false, enableHighAccuracy: true });
 
         map.on('locationfound', (e) => {
+            if (firstLocate) {
+                map.setView(e.latlng, 15);
+                firstLocate = false;
+            }
+
             const myPos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
-            
-            // Eigenen Marker zeichnen
-            updateMarker('me', myPos, "blue");
-            
-            // Position an alle Freunde schicken
+            updateMarker('me', myPos, "#3498db");
+
+            // Sofort an alle senden
             Object.values(connections).forEach(conn => {
                 if (conn.open) conn.send(myPos);
             });
         });
 
-        // 4. KOMMUNIKATION: Nachrichten empfangen
-        peer.on('connection', (conn) => {
-            setupConnection(conn);
-        });
+        // 4. PEER LOGIK
+        peer.on('connection', setupConnection);
 
         function setupConnection(conn) {
+            if (connections[conn.peer]) return;
             connections[conn.peer] = conn;
+            
             conn.on('data', (data) => {
-                if (data.lat && data.lon) {
-                    updateMarker(conn.peer, data, "red");
-                }
+                if (data.lat && data.lon) updateMarker(conn.peer, data, "#e74c3c");
             });
+            
             conn.on('close', () => {
                 if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
                 delete connections[conn.peer];
@@ -100,11 +109,10 @@
         }
 
         function searchFriends() {
-            for (let i = 1; i <= 10; i++) {
-                const targetId = "austria-team-slot-" + i;
-                if (targetId !== myId && (!connections[targetId] || !connections[targetId].open)) {
-                    const conn = peer.connect(targetId);
-                    setupConnection(conn);
+            for (let i = 1; i <= 5; i++) { // Erstmal auf 5 Slots begrenzt für Speed
+                const tid = "austria-team-slot-" + i;
+                if (tid !== myId && (!connections[tid] || !connections[tid].open)) {
+                    setupConnection(peer.connect(tid));
                 }
             }
             updateUI();
@@ -112,33 +120,18 @@
 
         function updateMarker(id, data, color) {
             const label = id === 'me' ? "Ich (" + data.name + ")" : data.name;
-            
             if (!markers[id]) {
-                markers[id] = L.marker([data.lat, data.lon]).addTo(map)
-                    .bindTooltip(label, { permanent: true, direction: 'top' });
-                
-                // Farbe ändern wenn es nicht "ich" bin (einfacher Kreis-Marker)
-                if (id !== 'me') {
-                    markers[id].setIcon(L.divIcon({
-                        className: 'custom-div-icon',
-                        html: "<div style='background-color:red; width:12px; height:12px; border-radius:50%; border:2px solid white;'></div>",
-                        iconSize: [12, 12], iconAnchor: [6, 6]
-                    }));
-                }
+                markers[id] = L.circleMarker([data.lat, data.lon], {
+                    radius: 8, fillOpacity: 0.8, color: "white", weight: 2, fillColor: color
+                }).addTo(map).bindTooltip(label, { permanent: true, direction: 'top' });
             } else {
                 markers[id].setLatLng([data.lat, data.lon]);
             }
         }
 
         function updateUI() {
-            const count = Object.values(connections).filter(c => c.open).length;
-            document.getElementById('peer-count').innerText = count;
+            document.getElementById('peer-count').innerText = Object.values(connections).filter(c=>c.open).length;
         }
-
-        // Falls GPS nicht geht
-        map.on('locationerror', () => {
-            alert("Bitte aktiviere GPS, damit man dich sehen kann!");
-        });
     </script>
 </body>
 </html>
