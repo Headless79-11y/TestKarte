@@ -3,146 +3,142 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map v10 - Fixed</title>
+    <title>Team-Karte Live</title>
+    
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; font-family: sans-serif; overflow: hidden; }
-        #map { height: 100vh; width: 100%; background: #eee; }
-        .status-box {
-            position: absolute; bottom: 20px; right: 10px; z-index: 1000;
-            background: white; padding: 15px; border-radius: 8px; border: 1px solid #333;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3); min-width: 200px;
+        body, html { margin: 0; padding: 0; height: 100%; font-family: Arial, sans-serif; }
+        #map { height: 100vh; width: 100%; background: #e0e0e0; }
+        
+        .overlay {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: white; padding: 15px; border-radius: 10px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.2); border: 1px solid #ccc;
         }
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; background: red; }
+        .online { background: #2ecc71; }
     </style>
 </head>
 <body>
-    <div class="status-box">
-        <strong>Gerät:</strong> <span id="display-name">...</span><br>
-        <strong>Netzwerk:</strong> <span id="status" style="color: orange;">Initialisiere...</span><br>
-        <strong>Partner:</strong> <span id="peer-count">0</span>
-        <div id="debug-log" style="font-size: 10px; color: #666; margin-top: 5px; border-top: 1px solid #ddd; padding-top: 5px;"></div>
+
+    <div class="overlay">
+        <strong>Status:</strong> <span id="status-text">Verbinde...</span> <span id="dot" class="status-dot"></span><br>
+        <strong>Dein Name:</strong> <span id="my-name-display">...</span><br>
+        <hr>
+        <strong>Partner auf Karte:</strong> <span id="peer-count">0</span>
     </div>
+
     <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-
     <script>
-        const log = (msg) => { 
-            const d = new Date();
-            const time = d.getHours() + ":" + d.getMinutes() + ":" + d.getSeconds();
-            document.getElementById('debug-log').innerText = time + " - " + msg; 
-        };
+        // 1. SETUP: Name und Karte
+        const myName = prompt("Dein Name für die Karte:", "User-" + Math.floor(Math.random()*100));
+        document.getElementById('my-name-display').innerText = myName;
+
+        const map = L.map('map').setView([47.6, 13.3], 7);
+        const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
         
-        window.onload = () => {
-            const nr = prompt("Bist du Gerät 1 oder 2?", "1");
-            let myName = localStorage.getItem('chatName') || "User-" + nr;
-            document.getElementById('display-name').innerText = myName;
+        // Dein eigener Karten-Server mit Fallback auf OpenStreetMap
+        L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
+            maxZoom: 20,
+            errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+        }).addTo(map);
 
-            // Karte Setup
-            const map = L.map('map').setView([47.6, 13.3], 7);
-            const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
+        // 2. NETZWERK: Wer bin ich?
+        // WICHTIG: Jedes Gerät braucht eine EIGENE Nummer (Slot).
+        const slot = prompt("Wähle eine Nummer (1-10):", "1");
+        const myId = "austria-team-slot-" + slot;
+        const peer = new Peer(myId);
+
+        let markers = {}; // Speichert alle Marker (Ich + Partner)
+        let connections = {};
+
+        peer.on('open', (id) => {
+            document.getElementById('status-text').innerText = "Bereit (Slot " + slot + ")";
+            document.getElementById('dot').classList.add('online');
             
-            L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { 
-                maxZoom: 20,
-                errorTileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
-            }).addTo(map);
+            // Suche alle 10 Sekunden nach den Slots 1 bis 10
+            setInterval(searchFriends, 10000);
+        });
 
-            if (typeof L.Control.Geocoder !== 'undefined') {
-                L.Control.geocoder().addTo(map);
-            }
+        // 3. STANDORT: Wo bin ich?
+        map.locate({ watch: true, setView: true, maxZoom: 15 });
 
-            // PeerJS Config
-            const ROOM = "at-stable-v10-"; 
-            const myId = ROOM + nr;
-            const targetId = ROOM + (nr == "1" ? "2" : "1");
-            let peer = null;
-            let connections = {};
-            let markers = {};
+        map.on('locationfound', (e) => {
+            const myPos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
+            
+            // Eigenen Marker zeichnen
+            updateMarker('me', myPos, "blue");
+            
+            // Position an alle Freunde schicken
+            Object.values(connections).forEach(conn => {
+                if (conn.open) conn.send(myPos);
+            });
+        });
 
-            function startPeer() {
-                if (peer) peer.destroy();
-                
-                peer = new Peer(myId, {
-                    debug: 1,
-                    config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
-                });
+        // 4. KOMMUNIKATION: Nachrichten empfangen
+        peer.on('connection', (conn) => {
+            setupConnection(conn);
+        });
 
-                peer.on('open', (id) => {
-                    document.getElementById('status').innerText = "✅ Online (Slot " + nr + ")";
-                    document.getElementById('status').style.color = "green";
-                    log("ID registriert.");
-                    setInterval(findPartner, 15000);
-                });
+        function setupConnection(conn) {
+            connections[conn.peer] = conn;
+            conn.on('data', (data) => {
+                if (data.lat && data.lon) {
+                    updateMarker(conn.peer, data, "red");
+                }
+            });
+            conn.on('close', () => {
+                if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
+                delete connections[conn.peer];
+                updateUI();
+            });
+        }
 
-                peer.on('error', (err) => {
-                    log("Fehler: " + err.type);
-                    if (err.type === 'network') {
-                        document.getElementById('status').innerText = "❌ Netz-Fehler";
-                        setTimeout(startPeer, 20000);
-                    }
-                });
-
-                peer.on('connection', setupConn);
-            }
-
-            function setupConn(conn) {
-                if (connections[conn.peer]) return;
-                
-                connections[conn.peer] = conn;
-                conn.on('data', (data) => {
-                    // Validierung der Daten [Wie von dir vorgeschlagen!]
-                    if (data && typeof data.lat === 'number' && typeof data.lon === 'number') {
-                        if (!markers[conn.peer]) {
-                            markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map)
-                                .bindTooltip(data.name || "Partner", {permanent:true});
-                        } else {
-                            markers[conn.peer].setLatLng([data.lat, data.lon]);
-                        }
-                    }
-                    const activeCount = Object.values(connections).filter(c => c.open).length;
-                    document.getElementById('peer-count').innerText = activeCount;
-                });
-
-                conn.on('close', () => {
-                    if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
-                    delete connections[conn.peer];
-                });
-            }
-
-            function findPartner() {
-                // Nur verbinden, wenn Partner nicht schon aktiv ist
-                if (peer && !peer.disconnected && (!connections[targetId] || !connections[targetId].open)) {
-                    log("Suche Partner...");
-                    setupConn(peer.connect(targetId));
+        function searchFriends() {
+            for (let i = 1; i <= 10; i++) {
+                const targetId = "austria-team-slot-" + i;
+                if (targetId !== myId && (!connections[targetId] || !connections[targetId].open)) {
+                    const conn = peer.connect(targetId);
+                    setupConnection(conn);
                 }
             }
+            updateUI();
+        }
 
-            // GPS Management
-            map.locate({watch: true, setView: true, maxZoom: 16});
+        function updateMarker(id, data, color) {
+            const label = id === 'me' ? "Ich (" + data.name + ")" : data.name;
             
-            map.on('locationfound', (e) => {
-                let pos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
-                if (!markers["me"]) {
-                    markers["me"] = L.marker(e.latlng).addTo(map).bindTooltip("Ich", {permanent:true});
-                } else {
-                    markers["me"].setLatLng(e.latlng);
+            if (!markers[id]) {
+                markers[id] = L.marker([data.lat, data.lon]).addTo(map)
+                    .bindTooltip(label, { permanent: true, direction: 'top' });
+                
+                // Farbe ändern wenn es nicht "ich" bin (einfacher Kreis-Marker)
+                if (id !== 'me') {
+                    markers[id].setIcon(L.divIcon({
+                        className: 'custom-div-icon',
+                        html: "<div style='background-color:red; width:12px; height:12px; border-radius:50%; border:2px solid white;'></div>",
+                        iconSize: [12, 12], iconAnchor: [6, 6]
+                    }));
                 }
-                // Senden
-                Object.values(connections).forEach(c => { if(c.open) c.send(pos); });
-            });
+            } else {
+                markers[id].setLatLng([data.lat, data.lon]);
+            }
+        }
 
-            // Fehlerbehandlung für GPS [Neu hinzugefügt!]
-            map.on('locationerror', (e) => {
-                log("GPS Fehler: " + e.message);
-                document.getElementById('status').innerText = "❌ Standort-Fehler";
-                document.getElementById('status').style.color = "red";
-            });
+        function updateUI() {
+            const count = Object.values(connections).filter(c => c.open).length;
+            document.getElementById('peer-count').innerText = count;
+        }
 
-            startPeer();
-        };
+        // Falls GPS nicht geht
+        map.on('locationerror', () => {
+            alert("Bitte aktiviere GPS, damit man dich sehen kann!");
+        });
     </script>
 </body>
 </html>
