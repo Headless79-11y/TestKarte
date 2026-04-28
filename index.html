@@ -3,28 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team-Karte v11</title>
-    
+    <title>Team-Karte v12 - Pro</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; font-family: Arial, sans-serif; }
-        #map { height: 100vh; width: 100%; background: #e0e0e0; }
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; }
+        #map { height: 100vh; width: 100%; }
         .overlay {
             position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: white; padding: 12px; border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2); font-size: 13px;
+            background: rgba(255, 255, 255, 0.9); padding: 15px; border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15); backdrop-filter: blur(5px);
         }
-        .status-dot { height: 8px; width: 8px; border-radius: 50%; display: inline-block; background: red; }
-        .online { background: #2ecc71; }
+        .slot-picker {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 2000; display: flex;
+            align-items: center; justify-content: center; color: white;
+        }
+        .picker-content { background: #333; padding: 25px; border-radius: 15px; text-align: center; max-width: 90%; }
+        .slot-btn { 
+            padding: 10px 15px; margin: 5px; border: none; border-radius: 5px; 
+            cursor: pointer; background: #444; color: white; transition: 0.3s;
+        }
+        .slot-btn:hover { background: #666; }
+        .slot-btn.taken { background: #8e44ad; opacity: 0.5; cursor: not-allowed; }
+        .slot-btn.free { background: #27ae60; }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
 
+    <div id="slot-screen" class="slot-picker hidden">
+        <div class="picker-content">
+            <h3>Wähle einen freien Slot</h3>
+            <p id="scan-status">Scanne Netzwerk nach freien Plätzen...</p>
+            <div id="slot-list"></div>
+            <button onclick="clearData()" style="margin-top:20px; background:none; border:none; color:#aaa; text-decoration:underline; cursor:pointer;">Daten zurücksetzen</button>
+        </div>
+    </div>
+
     <div class="overlay">
-        <strong>Status:</strong> <span id="status-text">Verbinde...</span> <span id="dot" class="status-dot"></span><br>
-        <strong>User:</strong> <span id="my-name-display">...</span> (Slot <span id="my-slot-display">?</span>)<br>
-        <strong>Partner:</strong> <span id="peer-count">0</span>
+        <strong><span id="display-name">...</span></strong> <br>
+        <small>Status: <span id="status-text">Initialisiere...</span></small>
+        <hr style="border:0; border-top:1px solid #ddd; margin: 8px 0;">
+        Partner online: <span id="peer-count">0</span>
     </div>
 
     <div id="map"></div>
@@ -34,103 +55,164 @@
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
     <script>
-        // 1. SPEICHERUNG & SETUP
-        let myName = localStorage.getItem('map_name') || prompt("Dein Name:", "User");
-        let slot = localStorage.getItem('map_slot') || prompt("Wähle Slot (1-10):", "1");
-        
-        localStorage.setItem('map_name', myName);
-        localStorage.setItem('map_slot', slot);
-        
-        document.getElementById('my-name-display').innerText = myName;
-        document.getElementById('my-slot-display').innerText = slot;
-
-        // Karte initialisieren
-        const map = L.map('map').setView([47.6, 13.3], 7);
-        const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
-        
-        L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
-            maxZoom: 20, errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
-        }).addTo(map);
-
-        // Suchfunktion wieder hinzufügen
-        L.Control.geocoder().addTo(map);
-
-        // 2. NETZWERK
-        const myId = "austria-team-slot-" + slot;
-        const peer = new Peer(myId, {
-            config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
-        });
-
+        const ROOM_ID = "austria-v12-";
+        let myName = localStorage.getItem('map_user_name');
+        let mySlot = localStorage.getItem('map_user_slot');
+        let peer, map, myMarker;
         let markers = {};
         let connections = {};
-        let firstLocate = true; // Flag für einmalige Zentrierung
+        let isFirstLocation = true;
 
-        peer.on('open', () => {
-            document.getElementById('status-text').innerText = "Online";
-            document.getElementById('dot').classList.add('online');
-            setInterval(searchFriends, 5000); // Schnellerer Suchlauf
-        });
+        window.onload = init;
 
-        // 3. STANDORT & AKTUALISIERUNG
-        // Wir nutzen "highAccuracy" für bessere Daten
-        map.locate({ watch: true, setView: false, enableHighAccuracy: true });
-
-        map.on('locationfound', (e) => {
-            if (firstLocate) {
-                map.setView(e.latlng, 15);
-                firstLocate = false;
+        function init() {
+            // Namen merken
+            if (!myName) {
+                myName = prompt("Wie möchtest du auf der Karte heißen?", "User");
+                if(!myName) myName = "Unbekannt";
+                localStorage.setItem('map_user_name', myName);
             }
+            document.getElementById('display-name').innerText = myName;
 
-            const myPos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
-            updateMarker('me', myPos, "#3498db");
+            // Karte initialisieren
+            map = L.map('map', { zoomControl: false }).setView([47.6, 13.3], 7);
+            L.control.zoom({ position: 'bottomleft' }).addTo(map);
+            
+            const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
+            L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', {
+                maxZoom: 20, errorTileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+            }).addTo(map);
+            L.Control.geocoder({ position: 'topleft' }).addTo(map);
 
-            // Sofort an alle senden
-            Object.values(connections).forEach(conn => {
-                if (conn.open) conn.send(myPos);
+            // Slot Check
+            if (!mySlot) {
+                showSlotPicker();
+            } else {
+                startNetworking(mySlot);
+            }
+        }
+
+        async function showSlotPicker() {
+            const screen = document.getElementById('slot-screen');
+            const list = document.getElementById('slot-list');
+            screen.classList.remove('hidden');
+            list.innerHTML = "";
+
+            // Temporärer Peer zum Scannen
+            const scanner = new Peer();
+            
+            for (let i = 1; i <= 8; i++) {
+                const btn = document.createElement('button');
+                btn.className = "slot-btn";
+                btn.innerText = "Slot " + i;
+                
+                // Wir versuchen kurz zu verbinden, um zu sehen ob besetzt
+                const conn = scanner.connect(ROOM_ID + i);
+                let isTaken = false;
+                
+                const checkTimeout = setTimeout(() => {
+                    btn.classList.add('free');
+                    btn.onclick = () => selectSlot(i);
+                    conn.close();
+                }, 1500);
+
+                conn.on('open', () => {
+                    clearTimeout(checkTimeout);
+                    btn.classList.add('taken');
+                    btn.innerText += " (Besetzt)";
+                    conn.close();
+                });
+                list.appendChild(btn);
+            }
+            document.getElementById('scan-status').innerText = "Scan abgeschlossen. Wähle einen grünen Slot.";
+        }
+
+        function selectSlot(num) {
+            mySlot = num;
+            localStorage.setItem('map_user_slot', num);
+            document.getElementById('slot-screen').classList.add('hidden');
+            location.reload(); // Seite neu laden mit festem Slot
+        }
+
+        function startNetworking(slotNum) {
+            peer = new Peer(ROOM_ID + slotNum, {
+                config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
             });
-        });
 
-        // 4. PEER LOGIK
-        peer.on('connection', setupConnection);
+            peer.on('open', () => {
+                document.getElementById('status-text').innerText = "Online (Slot " + slotNum + ")";
+                startLocationTracking();
+                setInterval(connectToOthers, 10000);
+            });
 
-        function setupConnection(conn) {
-            if (connections[conn.peer]) return;
+            peer.on('connection', handleConnection);
+        }
+
+        function startLocationTracking() {
+            // Hintergrund-Modus: Wir fordern hohe Genauigkeit an
+            map.locate({ watch: true, setView: false, enableHighAccuracy: true });
+            
+            map.on('locationfound', (e) => {
+                if (isFirstLocation) {
+                    map.setView(e.latlng, 15);
+                    isFirstLocation = false;
+                }
+                const data = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
+                updateMarker('me', data);
+                broadcastPosition(data);
+            });
+        }
+
+        function handleConnection(conn) {
             connections[conn.peer] = conn;
-            
             conn.on('data', (data) => {
-                if (data.lat && data.lon) updateMarker(conn.peer, data, "#e74c3c");
+                if (data.lat && data.lon) updateMarker(conn.peer, data);
             });
-            
             conn.on('close', () => {
                 if (markers[conn.peer]) map.removeLayer(markers[conn.peer]);
                 delete connections[conn.peer];
-                updateUI();
+                updatePeerCount();
             });
         }
 
-        function searchFriends() {
-            for (let i = 1; i <= 5; i++) { // Erstmal auf 5 Slots begrenzt für Speed
-                const tid = "austria-team-slot-" + i;
-                if (tid !== myId && (!connections[tid] || !connections[tid].open)) {
-                    setupConnection(peer.connect(tid));
+        function connectToOthers() {
+            for (let i = 1; i <= 8; i++) {
+                const target = ROOM_ID + i;
+                if (target !== ROOM_ID + mySlot && (!connections[target] || !connections[target].open)) {
+                    const conn = peer.connect(target);
+                    handleConnection(conn);
                 }
             }
-            updateUI();
+            updatePeerCount();
         }
 
-        function updateMarker(id, data, color) {
-            const label = id === 'me' ? "Ich (" + data.name + ")" : data.name;
+        function broadcastPosition(pos) {
+            Object.values(connections).forEach(c => {
+                if (c.open) c.send(pos);
+            });
+        }
+
+        function updateMarker(id, data) {
+            const isMe = id === 'me';
+            const color = isMe ? '#3498db' : '#e74c3c';
+            const label = isMe ? "Ich (" + data.name + ")" : data.name;
+
             if (!markers[id]) {
                 markers[id] = L.circleMarker([data.lat, data.lon], {
-                    radius: 8, fillOpacity: 0.8, color: "white", weight: 2, fillColor: color
-                }).addTo(map).bindTooltip(label, { permanent: true, direction: 'top' });
+                    radius: 10, fillColor: color, color: "#white", weight: 2, fillOpacity: 0.9
+                }).addTo(map).bindTooltip(label, { permanent: true, direction: 'top', offset: [0, -10] });
             } else {
                 markers[id].setLatLng([data.lat, data.lon]);
             }
         }
 
-        function updateUI() {
+        function updatePeerCount() {
             document.getElementById('peer-count').innerText = Object.values(connections).filter(c=>c.open).length;
+        }
+
+        function clearData() {
+            localStorage.clear();
+            location.reload();
         }
     </script>
 </body>
