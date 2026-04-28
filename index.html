@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Map5</title>
+    <title>Live Map5 - Stable</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <style>
@@ -33,21 +33,28 @@
         const log = (msg) => { document.getElementById('debug-log').innerText = msg; console.log(msg); };
         
         window.onload = () => {
-            let myName = localStorage.getItem('chatName') || prompt("Name?", "User-" + Math.floor(Math.random()*100));
+            let myName = localStorage.getItem('chatName') || prompt("Dein Name?", "User-" + Math.floor(Math.random()*100));
             localStorage.setItem('chatName', myName);
             document.getElementById('display-name').innerText = myName;
 
             const map = L.map('map').setView([47.6, 13.3], 7);
             const tunnelUrl = 'https://eddie-cigarette-cleared-tooth.trycloudflare.com';
-            L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { maxZoom: 20 }).addTo(map);
+            
+            L.tileLayer(tunnelUrl + '/styles/basic-preview/{z}/{x}/{y}.png', { 
+                maxZoom: 20,
+                errorTileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' // Fallback falls Tunnel hakt
+            }).addTo(map);
 
-            // Geocoder sicher laden
             if (typeof L.Control.Geocoder !== 'undefined') {
                 L.Control.geocoder().addTo(map);
             }
 
-            const ROOM = "at-stable-v8-";
-            const myId = ROOM + Math.floor(Math.random() * 10000);
+            // --- STABILE NETZWERK LOGIK ---
+            const ROOM = "at-stable-v9-"; 
+            const mySlot = prompt("Bist du Gerät 1 oder 2?", "1");
+            const myId = ROOM + mySlot;
+            const targetId = ROOM + (mySlot == "1" ? "2" : "1");
+
             let peer = null;
             let connections = {};
             let markers = {};
@@ -55,68 +62,6 @@
             function startPeer() {
                 if (peer) peer.destroy();
                 
-                // Wir nutzen den Standard-Server, aber mit Fehler-Bremse
-                peer = new Peer(myId, { debug: 1 });
-
-                peer.on('open', (id) => {
-                    document.getElementById('status').innerText = "✅ Online";
-                    document.getElementById('status').style.color = "green";
-                    log("ID: " + id);
-                    setInterval(findPeers, 10000);
-                });
-
-                peer.on('error', (err) => {
-                    document.getElementById('status').innerText = "❌ " + err.type;
-                    document.getElementById('status').style.color = "red";
-                    log("Fehler: " + err.type);
-                    if (err.type === 'network') {
-                        // 15 Sek Pause bei Netzwerkfehler
-                        setTimeout(startPeer, 15000);
-                    }
-                });
-
-                peer.on('connection', setupConn);
-            }
-
-            function setupConn(conn) {
-                connections[conn.peer] = conn;
-                conn.on('data', (data) => {
-                    if (data.lat && data.lon) {
-                        if (!markers[conn.peer]) {
-                            markers[conn.peer] = L.marker([data.lat, data.lon]).addTo(map)
-                                .bindTooltip(data.name || "Partner", {permanent:true});
-                        } else {
-                            markers[conn.peer].setLatLng([data.lat, data.lon]);
-                        }
-                    }
-                    document.getElementById('peer-count').innerText = Object.values(connections).filter(c=>c.open).length;
-                });
-            }
-
-            function findPeers() {
-                // Nur Scannen wenn wir selbst online sind
-                if (!peer || peer.disconnected) return;
-                for (let i = 0; i < 10; i++) {
-                    let tid = ROOM + i; // Versuche Standard-Slots zu finden
-                    if (tid !== myId && (!connections[tid] || !connections[tid].open)) {
-                        setupConn(peer.connect(tid));
-                    }
-                }
-            }
-
-            map.locate({watch: true, setView: true, maxZoom: 16});
-            map.on('locationfound', (e) => {
-                let pos = { lat: e.latlng.lat, lon: e.latlng.lng, name: myName };
-                if (!markers["me"]) {
-                    markers["me"] = L.marker(e.latlng).addTo(map).bindTooltip("Ich", {permanent:true});
-                } else {
-                    markers["me"].setLatLng(e.latlng);
-                }
-                Object.values(connections).forEach(c => { if(c.open) c.send(pos); });
-            });
-
-            startPeer();
-        };
-    </script>
-</body>
-</html>
+                // STUN Server helfen, die "Peer Unavailable" Fehler im Mobilfunk/WLAN zu lösen
+                peer = new Peer(myId, {
+                    debug: 1,
