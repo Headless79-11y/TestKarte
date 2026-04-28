@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team-Karte v15 - High-Speed</title>
+    <title>Karte v15</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
     <style>
@@ -142,7 +142,7 @@
                 document.getElementById('status-text').style.color = "green";
                 startTracking();
                 // Schnellere Suche (3 Sek statt 5/10)
-                setInterval(searchPartners, 3000);
+                setInterval(searchPartners, 6000);
             });
 
             peer.on('error', (err) => {
